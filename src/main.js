@@ -3,8 +3,31 @@ const { app, BrowserWindow, ipcMain, dialog, shell, net, clipboard } = require("
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
-const Store = require("electron-store");
+const { bootstrapRuntime, diagnoseEnvironment, dirSizeBytesBudgeted, cancelRuntimeInstall, resolveEnvPython } = require("./runtime-bootstrap");
 
+/**
+ * Portable builds should keep data next to the .exe (self-contained).
+ * Installed builds use the normal AppData location.
+ * Must run before electron-store / any getPath("userData") usage.
+ */
+function configureAppPaths() {
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR;
+  if (!portableDir) return { mode: "installed", dataDir: null, portableDir: null };
+
+  const dataDir = path.join(portableDir, "OpenModelDB-Upscaler-Data");
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    app.setPath("userData", dataDir);
+    return { mode: "portable", dataDir, portableDir };
+  } catch (err) {
+    console.error("Failed to set portable userData:", err);
+    return { mode: "installed", dataDir: null, portableDir, error: String(err.message || err) };
+  }
+}
+
+const appLayout = configureAppPaths();
+
+const Store = require("electron-store");
 const store = new Store({
   name: "settings",
   defaults: {
@@ -14,6 +37,8 @@ const store = new Store({
     factor: 4,
     longest: 2048,
     tile: 256,
+    customPython: "",
+    installTarget: "appdata",
   },
 });
 
@@ -53,29 +78,54 @@ function pythonScript() {
   return path.join(appRoot(), "python", "upscale.py");
 }
 
-function resolvePython() {
-  const localVenv = path.join(
-    app.isPackaged ? process.resourcesPath : appRoot(),
-    "python",
-    ".venv",
-    process.platform === "win32" ? "Scripts\\python.exe" : "bin/python"
-  );
-  const userVenv = path.join(
-    app.getPath("userData"),
-    "python",
-    ".venv",
-    process.platform === "win32" ? "Scripts\\python.exe" : "bin/python"
-  );
-  const candidates = [
-    process.env.UPSCALER_PYTHON,
-    userVenv,
-    localVenv,
-  ].filter(Boolean);
-  for (const c of candidates) {
-    if (c && fs.existsSync(c)) return c;
+function requirementsFile() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "python", "requirements.txt");
   }
-  return process.platform === "win32" ? "python" : "python3";
+  return path.join(appRoot(), "python", "requirements.txt");
 }
+
+function runtimePaths() {
+  let downloadsDir = null;
+  try {
+    downloadsDir = app.getPath("downloads");
+  } catch {
+    downloadsDir = path.join(app.getPath("home"), "Downloads");
+  }
+  return {
+    userDataDir: app.getPath("userData"),
+    downloadCacheDir: path.join(downloadsDir, "OpenModelDB-Upscaler-Cache"),
+    projectPythonDir: app.isPackaged
+      ? path.join(process.resourcesPath, "python")
+      : path.join(appRoot(), "python"),
+    resourcesDir: app.isPackaged ? process.resourcesPath : null,
+    requirementsFile: requirementsFile(),
+    layout: appLayout.mode,
+    portableDir: appLayout.portableDir,
+  };
+}
+
+function diagnoseRuntime() {
+  return diagnoseEnvironment({
+    ...runtimePaths(),
+    customPython: store.get("customPython") || "",
+  });
+}
+
+function resolvePython() {
+  const report = diagnoseRuntime();
+  return report.python || null;
+}
+
+function requirePython() {
+  const py = resolvePython();
+  if (py) return py;
+  throw new Error(
+    "AI runtime not ready. Open the Setup tab and install/reuse a Python env with torch + spandrel."
+  );
+}
+
+let runtimeInstallPromise = null;
 
 function listLocalModels() {
   const dirs = [modelsDir(), userModelsDir()];
@@ -766,7 +816,7 @@ ipcMain.handle("open-external", async (_e, url) => {
   if (url) await shell.openExternal(url);
 });
 
-ipcMain.handle("omdb-list", async (_e, { query = "", scale = null, tag = "", limit = 60 } = {}) => {
+ipcMain.handle("omdb-list", async (_e, { query = "", scale = null, tag = "", limit = 36, offset = 0 } = {}) => {
   const data = await fetchOmdb(false);
   const q = String(query || "").trim().toLowerCase();
   const items = [];
@@ -799,7 +849,15 @@ ipcMain.handle("omdb-list", async (_e, { query = "", scale = null, tag = "", lim
     if (d) return d;
     return String(a.name).localeCompare(String(b.name));
   });
-  return { total: items.length, models: items.slice(0, limit), base: OMDB_BASE };
+  const start = Math.max(0, Number(offset) || 0);
+  const pageSize = Math.max(1, Math.min(100, Number(limit) || 36));
+  return {
+    total: items.length,
+    offset: start,
+    limit: pageSize,
+    models: items.slice(start, start + pageSize),
+    base: OMDB_BASE,
+  };
 });
 
 ipcMain.handle("omdb-refresh", async () => {
@@ -854,7 +912,7 @@ ipcMain.handle("upscale", async (event, opts) => {
   if (!modelPath || !fs.existsSync(modelPath)) throw new Error("Model file missing");
   if (!output) throw new Error("Output path missing");
 
-  const py = resolvePython();
+  const py = requirePython();
   const script = pythonScript();
   if (!fs.existsSync(script)) throw new Error(`Upscale script missing: ${script}`);
 
@@ -945,7 +1003,144 @@ ipcMain.handle("cancel-upscale", async () => {
 });
 
 ipcMain.handle("python-status", async () => {
-  const py = resolvePython();
-  const exists = fs.existsSync(py) || py === "python" || py === "python3";
-  return { python: py, ready: exists, script: pythonScript(), modelsDir: modelsDir(), userModelsDir: userModelsDir() };
+  const report = diagnoseRuntime();
+  const paths = runtimePaths();
+  const venvDir = path.join(paths.userDataDir, "python", ".venv");
+  const userDataBytes = dirSizeBytesBudgeted(paths.userDataDir, 8000);
+  const venvBytes = dirSizeBytesBudgeted(venvDir, 8000);
+  const cacheBytes = paths.downloadCacheDir
+    ? dirSizeBytesBudgeted(paths.downloadCacheDir, 8000)
+    : 0;
+  const preferred = report.preferred || null;
+  return {
+    python: report.python || "(missing)",
+    ready: report.ready,
+    source: preferred?.kind || null,
+    note: preferred?.note || null,
+    version: preferred?.version || null,
+    torch: preferred?.torch || null,
+    cuda: preferred?.cuda || false,
+    gpu: preferred?.gpu || null,
+    spandrel: preferred?.spandrel || null,
+    missing: preferred?.missing || report.customCandidate?.missing || [],
+    customPython: store.get("customPython") || "",
+    installTarget: store.get("installTarget") || "appdata",
+    customCandidate: report.customCandidate || null,
+    script: pythonScript(),
+    modelsDir: modelsDir(),
+    userModelsDir: userModelsDir(),
+    diagnosis: report,
+    layout: appLayout.mode,
+    portableDir: appLayout.portableDir,
+    userData: paths.userDataDir,
+    downloadCache: paths.downloadCacheDir,
+    disk: {
+      userDataBytes,
+      venvBytes,
+      cacheBytes,
+      expectedBytes: require("./runtime-bootstrap").EXPECTED_RUNTIME_BYTES,
+    },
+  };
+});
+
+ipcMain.handle("pick-python-env", async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "Select a Python venv folder (e.g. ComfyUI\\venv)",
+    properties: ["openDirectory"],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const resolved = resolveEnvPython(result.filePaths[0]);
+  if (!resolved) {
+    throw new Error(
+      "Could not find python.exe in that folder. Pick a venv directory that contains Scripts\\python.exe."
+    );
+  }
+  const info = require("./runtime-bootstrap").inspectPython(resolved);
+  store.set("customPython", resolved);
+  return {
+    python: resolved,
+    info,
+    ready: Boolean(info?.ready),
+    missing: info?.missing || [],
+  };
+});
+
+ipcMain.handle("clear-custom-python", async () => {
+  store.set("customPython", "");
+  return true;
+});
+
+ipcMain.handle("set-install-target", async (_e, target) => {
+  const value = target === "selected" ? "selected" : "appdata";
+  store.set("installTarget", value);
+  return value;
+});
+
+ipcMain.handle("open-runtime-folder", async () => {
+  const dir = runtimePaths().userDataDir;
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
+
+ipcMain.handle("open-download-cache", async () => {
+  const dir = runtimePaths().downloadCacheDir;
+  if (!dir) return false;
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
+
+ipcMain.handle("diagnose-runtime", async () => diagnoseRuntime());
+
+ipcMain.handle("cancel-runtime-install", async () => {
+  const result = cancelRuntimeInstall();
+  return result;
+});
+
+ipcMain.handle("install-runtime", async (event) => {
+  if (runtimeInstallPromise) return runtimeInstallPromise;
+
+  const send = (payload) => {
+    try {
+      event.sender.send("runtime-progress", payload);
+    } catch {
+      /* window gone */
+    }
+  };
+  const log = (line) => {
+    try {
+      // Only one channel — renderer mirrors into both console panes.
+      event.sender.send("runtime-log", line);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  runtimeInstallPromise = (async () => {
+    const result = await bootstrapRuntime({
+      ...runtimePaths(),
+      customPython: store.get("customPython") || "",
+      installTarget: store.get("installTarget") || "appdata",
+      onLog: log,
+      onProgress: send,
+    });
+    return {
+      ok: true,
+      python: result.python,
+      already: result.already,
+      source: result.source,
+      diagnosis: result.diagnosis,
+      cacheCleared: result.cacheCleared,
+    };
+  })();
+
+  try {
+    return await runtimeInstallPromise;
+  } catch (err) {
+    if (err?.cancelled) {
+      return { ok: false, cancelled: true };
+    }
+    throw err;
+  } finally {
+    runtimeInstallPromise = null;
+  }
 });

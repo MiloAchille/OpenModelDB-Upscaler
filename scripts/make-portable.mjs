@@ -2,7 +2,8 @@
 /**
  * Assemble a ready-to-run portable folder:
  *   dist/OpenModelDB-Upscaler-Portable/
- * containing the unpacked Electron app + models + python/.venv
+ * Prefer `build.bat` which bundles python/.venv via electron-builder extraResources.
+ * This script is a fallback that copies win-unpacked + venv manually.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

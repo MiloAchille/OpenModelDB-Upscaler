@@ -11,6 +11,8 @@ const state = {
   models: [],
   selectedModel: null,
   busy: false,
+  runtimeReady: false,
+  runtimeInstalling: false,
   split: 0.5,
   zoom: 1,
   panX: 0,
@@ -25,15 +27,28 @@ function appendLog(line) {
   if (!text) return;
   // Ignore noisy torch future-warnings that aren't real failures.
   if (/torch\.meshgrid|UserWarning:|Triggered internally at/i.test(text)) return;
-  const el = $("#log");
   const stamp = new Date().toLocaleTimeString([], { hour12: false });
-  el.textContent += `[${stamp}] ${text}\n`;
-  el.scrollTop = el.scrollHeight;
+  const entry = `[${stamp}] ${text}\n`;
+  for (const id of ["#log", "#runtime-log"]) {
+    const el = $(id);
+    if (!el) continue;
+    el.textContent += entry;
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function clearLogs() {
+  for (const id of ["#log", "#runtime-log"]) {
+    const el = $(id);
+    if (el) el.textContent = "";
+  }
 }
 
 function setProgress(pct, label) {
-  $("#progress-fill").style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
-  $("#progress-label").textContent = label || "idle";
+  if (typeof pct === "number" && !Number.isNaN(pct)) {
+    $("#progress-fill").style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  }
+  if (label) $("#progress-label").textContent = label;
 }
 
 function basename(p) {
@@ -59,6 +74,16 @@ function syncChipUi() {
   document.querySelectorAll("#longest-chips .chip").forEach((b) => {
     b.classList.toggle("active", Number(b.dataset.longest) === Number(state.longest));
   });
+  const custom = $("#longest-custom");
+  if (custom && String(custom.value) !== String(state.longest)) {
+    custom.value = String(state.longest);
+  }
+}
+
+function clampLongest(n) {
+  const v = Math.round(Number(n));
+  if (!Number.isFinite(v)) return state.longest || 2048;
+  return Math.max(64, Math.min(16384, v));
 }
 
 function updateViewerChrome() {
@@ -310,8 +335,288 @@ async function loadInput(filePath) {
   appendLog(`loaded ${basename(filePath)}`);
 }
 
+function formatRuntimeBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1024) return `${v} B`;
+  if (v < 1048576) return `${(v / 1024).toFixed(1)} KB`;
+  if (v < 1073741824) return `${(v / 1048576).toFixed(1)} MB`;
+  return `${(v / 1073741824).toFixed(2)} GB`;
+}
+
+function updateRuntimeLive(payload) {
+  const live = $("#runtime-live");
+  const stageEl = $("#runtime-live-stage");
+  const statsEl = $("#runtime-live-stats");
+  if (!live || !stageEl || !statsEl || !payload) return;
+  live.hidden = false;
+  stageEl.textContent = payload.message || payload.stage || "Working…";
+  const expected = payload.expectedBytes || payload.total || Math.round(4.5 * 1024 * 1024 * 1024);
+  const bits = [];
+  if (payload.packageName) bits.push(payload.packageName);
+  if (payload.downloaded != null) {
+    const total = payload.total && payload.total > payload.downloaded ? payload.total : expected;
+    bits.push(`${formatRuntimeBytes(payload.downloaded)} / ${formatRuntimeBytes(total)}`);
+  } else if (payload.diskBytes != null) {
+    bits.push(`on disk ${formatRuntimeBytes(payload.diskBytes)}`);
+  }
+  if (typeof payload.percent === "number") bits.push(`${payload.percent}%`);
+  if (payload.elapsedSec != null) bits.push(`${payload.elapsedSec}s`);
+  if (payload.stage) bits.push(`stage:${payload.stage}`);
+  statsEl.textContent = bits.join(" · ") || "CUDA runtime typically ends around ~4.5 GB";
+}
+
+function renderRuntimeSteps(steps = []) {
+  const list = $("#runtime-steps");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const step of steps) {
+    const li = document.createElement("li");
+    li.className = `runtime-step ${step.status || "info"}`;
+    const dot = document.createElement("div");
+    dot.className = "runtime-step-dot";
+    const body = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "runtime-step-title";
+    title.textContent = step.title || step.id;
+    body.appendChild(title);
+    if (step.detail) {
+      const detail = document.createElement("div");
+      detail.className = "runtime-step-detail";
+      detail.textContent = step.detail;
+      body.appendChild(detail);
+    }
+    li.append(dot, body);
+    list.appendChild(li);
+  }
+}
+
+function setRuntimeProgress(pct) {
+  const fill = $("#runtime-progress-fill");
+  if (fill && typeof pct === "number" && !Number.isNaN(pct)) {
+    fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  }
+}
+
+function switchTab(tabId) {
+  const tab = document.querySelector(`.tab[data-tab="${tabId}"]`);
+  if (!tab || tab.disabled) return;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  tab.classList.add("active");
+  $(`#panel-${tabId}`)?.classList.add("active");
+  if (tabId === "models") loadOmdb();
+  if (tabId === "library") refreshLibrary();
+}
+
+function applyTabLocks(ready) {
+  document.querySelectorAll(".tab").forEach((tab) => {
+    const id = tab.dataset.tab;
+    if (id === "setup") {
+      tab.disabled = false;
+      tab.classList.remove("locked");
+      return;
+    }
+    const lock = !ready;
+    tab.disabled = lock;
+    tab.classList.toggle("locked", lock);
+  });
+  const gate = $("#runtime-gate");
+  if (gate) gate.hidden = ready;
+}
+
+function renderRuntimeInfo(py) {
+  const grid = $("#runtime-info-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+  const card = (k, v, mono = false) => {
+    const el = document.createElement("div");
+    el.className = "runtime-info-card";
+    el.innerHTML = `<div class="k">${k}</div><div class="v${mono ? " mono" : ""}"></div>`;
+    el.querySelector(".v").textContent = v;
+    grid.appendChild(el);
+  };
+
+  card("Status", py.ready ? "Ready" : "Setup required");
+  card("Layout", py.layout || "installed");
+  if (py.version) card("Python", py.version);
+  if (py.torch) card("PyTorch", String(py.torch));
+  card("CUDA", py.cuda ? `Yes${py.gpu ? ` · ${py.gpu}` : ""}` : "No / CPU");
+  if (py.spandrel) card("Spandrel", String(py.spandrel));
+  if (py.source) card("Source", py.source);
+  if (py.disk) {
+    card("Venv size", formatRuntimeBytes(py.disk.venvBytes || 0));
+    card("App data size", formatRuntimeBytes(py.disk.userDataBytes || 0));
+    card("Download cache", formatRuntimeBytes(py.disk.cacheBytes || 0));
+    card("Expected CUDA env", `~${formatRuntimeBytes(py.disk.expectedBytes || 4.5 * 1024 ** 3)}`);
+  }
+  if (py.python && py.python !== "(missing)") card("Interpreter", py.python, true);
+  if (py.userData) card("Data folder", py.userData, true);
+  if (py.downloadCache) card("Cache folder", py.downloadCache, true);
+}
+
+async function refreshRuntimeUi() {
+  const py = await window.api.pythonStatus();
+  state.runtimeReady = Boolean(py.ready);
+  state.runtimeDiagnosis = py.diagnosis || null;
+
+  applyTabLocks(py.ready && !state.runtimeInstalling);
+
+  const badge = $("#runtime-badge");
+  if (badge) {
+    badge.className = "runtime-badge";
+    if (state.runtimeInstalling) {
+      badge.classList.add("busy");
+      badge.textContent = "Installing";
+    } else if (py.ready) {
+      badge.classList.add("ok");
+      badge.textContent = "Ready";
+    } else {
+      badge.classList.add("warn");
+      badge.textContent = "Setup needed";
+    }
+  }
+
+  renderRuntimeInfo(py);
+  renderRuntimeSteps(py.diagnosis?.steps || []);
+
+  const customPath = $("#runtime-custom-path");
+  const customStatus = $("#runtime-custom-status");
+  const targetSel = $("#runtime-install-target");
+  if (customPath) {
+    customPath.textContent = py.customPython || "None selected";
+  }
+  if (targetSel && py.installTarget) {
+    targetSel.value = py.installTarget === "selected" ? "selected" : "appdata";
+  }
+  if (customStatus) {
+    const cand = py.customCandidate || py.diagnosis?.customCandidate;
+    if (!py.customPython) {
+      customStatus.textContent = "Optional — e.g. ComfyUI\\venv from Stability Matrix.";
+    } else if (cand?.ready || (py.ready && py.source === "custom")) {
+      customStatus.textContent = `Ready · torch ${cand?.torch || py.torch || "?"}${
+        cand?.cuda || py.cuda ? " · CUDA" : ""
+      }`;
+    } else if (cand?.version) {
+      customStatus.textContent = `Found Python ${cand.version} · missing: ${(cand.missing || py.missing || []).join(", ") || "deps"}`;
+    } else {
+      customStatus.textContent = "Path saved but not usable yet — Rescan or pick another folder.";
+    }
+  }
+
+  const active = $("#runtime-active");
+  const pathEl = $("#runtime-active-path");
+  const metaEl = $("#runtime-active-meta");
+  if (active && pathEl && metaEl) {
+    if (py.ready && py.python && py.python !== "(missing)") {
+      active.hidden = false;
+      pathEl.textContent = py.python;
+      metaEl.textContent = [py.source && `source: ${py.source}`, py.note].filter(Boolean).join(" · ");
+    } else {
+      active.hidden = true;
+    }
+  }
+
+  const installBtn = $("#btn-install-runtime");
+  const cancelBtn = $("#btn-cancel-runtime");
+  if (installBtn) {
+    installBtn.disabled = Boolean(state.runtimeInstalling);
+    const cand = py.customCandidate || py.diagnosis?.customCandidate;
+    if (py.ready) {
+      installBtn.textContent = "Re-check / repair runtime";
+    } else if (cand?.version && (py.installTarget || "appdata") === "selected") {
+      installBtn.textContent = `Install missing into selected env`;
+    } else if (cand?.version) {
+      installBtn.textContent = "Create AppData venv + install (~4.5 GB if torch needed)";
+    } else if (py.diagnosis?.baseForInstall) {
+      installBtn.textContent = "Create AppData venv + install (~4.5 GB)";
+    } else {
+      installBtn.textContent = "Download Python + install (~4.5 GB)";
+    }
+  }
+  if (cancelBtn) {
+    cancelBtn.hidden = !state.runtimeInstalling;
+    cancelBtn.disabled = !state.runtimeInstalling;
+  }
+
+  return py;
+}
+
+async function installRuntime() {
+  if (state.runtimeInstalling) return;
+  state.runtimeInstalling = true;
+  switchTab("setup");
+  applyTabLocks(false);
+  await refreshRuntimeUi();
+  setProgress(2, "setting up AI runtime…");
+  setRuntimeProgress(2);
+  appendLog("runtime setup started…");
+  const live = $("#runtime-live");
+  if (live) live.hidden = false;
+  try {
+    const result = await window.api.installRuntime();
+    if (result?.cancelled) {
+      appendLog("runtime setup cancelled — incomplete venv + download cache cleared");
+      setProgress(0, "runtime setup cancelled");
+      setRuntimeProgress(0);
+      if (live) {
+        $("#runtime-live-stage").textContent = "Cancelled";
+        $("#runtime-live-stats").textContent = "Cache and incomplete venv were removed";
+      }
+      await refreshRuntimeUi();
+      return;
+    }
+    const msg = result.already
+      ? `reused existing runtime · ${result.python}`
+      : `runtime ready · ${result.python}`;
+    appendLog(msg);
+    if (result.cacheCleared) appendLog("download cache cleared after successful setup");
+    setProgress(100, "AI runtime ready");
+    setRuntimeProgress(100);
+    if (live) {
+      $("#runtime-live-stage").textContent = "AI runtime ready";
+      $("#runtime-live-stats").textContent = result.python || "";
+    }
+    await refreshRuntimeUi();
+  } catch (err) {
+    if (String(err?.message || err).toLowerCase().includes("cancel")) {
+      appendLog("runtime setup cancelled");
+      setProgress(0, "runtime setup cancelled");
+      setRuntimeProgress(0);
+    } else {
+      appendLog(`runtime setup failed · ${err.message || err}`);
+      setProgress(0, "runtime setup failed");
+      setRuntimeProgress(0);
+    }
+    throw err;
+  } finally {
+    state.runtimeInstalling = false;
+    await refreshRuntimeUi();
+  }
+}
+
+async function cancelRuntimeInstall() {
+  if (!state.runtimeInstalling) return;
+  appendLog("cancel requested — stopping downloads and clearing cache…");
+  const cancelBtn = $("#btn-cancel-runtime");
+  if (cancelBtn) cancelBtn.disabled = true;
+  try {
+    await window.api.cancelRuntimeInstall();
+  } catch (err) {
+    appendLog(`cancel failed · ${err.message || err}`);
+  }
+}
+
 async function runUpscale() {
   if (!state.inputPath || !state.selectedModel || state.busy) return;
+
+  const py = await refreshRuntimeUi();
+  if (!py.ready) {
+    appendLog("AI runtime missing — open the Setup tab to finish setup.");
+    switchTab("setup");
+    setProgress(0, "runtime setup required");
+    return;
+  }
+
   const defaultName = `${stem(state.inputPath)}_x${
     state.mode === "factor" ? state.factor : state.longest
   }.${state.format}`;
@@ -631,16 +936,54 @@ function renderOmdbCards(models) {
 }
 
 let omdbTimer = null;
-async function loadOmdb() {
+const OMDB_PAGE_SIZE = 36;
+let omdbPage = 0;
+let omdbTotal = 0;
+
+function updateOmdbPager() {
+  const pager = $("#omdb-pager");
+  const label = $("#omdb-page-label");
+  const prev = $("#btn-omdb-prev");
+  const next = $("#btn-omdb-next");
+  if (!pager || !label || !prev || !next) return;
+  const pages = Math.max(1, Math.ceil(omdbTotal / OMDB_PAGE_SIZE) || 1);
+  const page = Math.min(omdbPage, pages - 1);
+  omdbPage = Math.max(0, page);
+  pager.hidden = omdbTotal <= OMDB_PAGE_SIZE;
+  label.textContent = `Page ${omdbPage + 1} / ${pages}`;
+  prev.disabled = omdbPage <= 0;
+  next.disabled = omdbPage >= pages - 1;
+}
+
+async function loadOmdb({ resetPage = false } = {}) {
+  if (resetPage) omdbPage = 0;
   $("#omdb-status").textContent = "fetching openmodeldb catalog…";
   try {
     const query = $("#omdb-query").value.trim();
     const scale = $("#omdb-scale").value || null;
-    const result = await window.api.omdbList({ query, scale, limit: 36 });
+    const result = await window.api.omdbList({
+      query,
+      scale,
+      limit: OMDB_PAGE_SIZE,
+      offset: omdbPage * OMDB_PAGE_SIZE,
+    });
+    omdbTotal = result.total || 0;
+    const pages = Math.max(1, Math.ceil(omdbTotal / OMDB_PAGE_SIZE) || 1);
+    if (omdbPage >= pages) {
+      omdbPage = Math.max(0, pages - 1);
+      return loadOmdb();
+    }
     renderOmdbCards(result.models);
-    $("#omdb-status").textContent = `showing ${result.models.length} of ${result.total} matches`;
+    updateOmdbPager();
+    const from = omdbTotal ? omdbPage * OMDB_PAGE_SIZE + 1 : 0;
+    const to = omdbPage * OMDB_PAGE_SIZE + (result.models?.length || 0);
+    $("#omdb-status").textContent = omdbTotal
+      ? `showing ${from}–${to} of ${omdbTotal} matches · ranked by preview quality, then name`
+      : "no matches";
   } catch (err) {
     $("#omdb-status").textContent = `failed to load catalog: ${err.message || err}`;
+    const pager = $("#omdb-pager");
+    if (pager) pager.hidden = true;
   }
 }
 
@@ -713,12 +1056,8 @@ function wireCompareInteractions() {
 function wireUi() {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-      tab.classList.add("active");
-      $(`#panel-${tab.dataset.tab}`).classList.add("active");
-      if (tab.dataset.tab === "models") loadOmdb();
-      if (tab.dataset.tab === "library") refreshLibrary();
+      if (tab.disabled || tab.classList.contains("locked")) return;
+      switchTab(tab.dataset.tab);
     });
   });
 
@@ -741,6 +1080,20 @@ function wireUi() {
       state.longest = Number(btn.dataset.longest);
       syncChipUi();
     });
+  });
+
+  const applyCustomLongest = () => {
+    const input = $("#longest-custom");
+    if (!input) return;
+    state.longest = clampLongest(input.value);
+    syncChipUi();
+  };
+  $("#longest-custom")?.addEventListener("change", applyCustomLongest);
+  $("#longest-custom")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applyCustomLongest();
+    }
   });
 
   $("#format-select").addEventListener("change", (e) => {
@@ -802,6 +1155,47 @@ function wireUi() {
   });
 
   $("#btn-upscale").addEventListener("click", runUpscale);
+  $("#btn-install-runtime")?.addEventListener("click", () => {
+    installRuntime().catch(() => {});
+  });
+  $("#btn-cancel-runtime")?.addEventListener("click", () => {
+    cancelRuntimeInstall().catch(() => {});
+  });
+  $("#btn-pick-python-env")?.addEventListener("click", async () => {
+    try {
+      const picked = await window.api.pickPythonEnv();
+      if (!picked) return;
+      appendLog(`selected env · ${picked.python}`);
+      if (picked.ready) appendLog("selected env is ready (torch + spandrel)");
+      else appendLog(`selected env missing · ${(picked.missing || []).join(", ") || "deps"}`);
+      await refreshRuntimeUi();
+    } catch (err) {
+      appendLog(`select env failed · ${err.message || err}`);
+    }
+  });
+  $("#btn-clear-python-env")?.addEventListener("click", async () => {
+    await window.api.clearCustomPython();
+    appendLog("cleared selected environment");
+    await refreshRuntimeUi();
+  });
+  $("#runtime-install-target")?.addEventListener("change", async (e) => {
+    const value = e.target.value === "selected" ? "selected" : "appdata";
+    await window.api.setInstallTarget(value);
+    appendLog(`install target · ${value}`);
+    await refreshRuntimeUi();
+  });
+  $("#btn-rescan-runtime")?.addEventListener("click", async () => {
+    appendLog("runtime rescan…");
+    const py = await refreshRuntimeUi();
+    appendLog(`runtime rescan · ${py.ready ? "ready" : "setup needed"} · ${py.python}`);
+    if (!py.ready) switchTab("setup");
+  });
+  $("#btn-open-runtime-folder")?.addEventListener("click", async () => {
+    await window.api.openRuntimeFolder();
+  });
+  $("#btn-open-cache-folder")?.addEventListener("click", async () => {
+    await window.api.openDownloadCache();
+  });
   $("#btn-cancel").addEventListener("click", async () => {
     await window.api.cancelUpscale();
     appendLog("cancel requested");
@@ -810,7 +1204,10 @@ function wireUi() {
     if (state.outputPath) window.api.openPath(state.outputPath);
   });
   $("#btn-clear-log").addEventListener("click", () => {
-    $("#log").textContent = "";
+    clearLogs();
+  });
+  $("#btn-clear-runtime-log")?.addEventListener("click", () => {
+    clearLogs();
   });
   $("#btn-toggle-console").addEventListener("click", () => {
     const panel = $("#console");
@@ -822,7 +1219,18 @@ function wireUi() {
 
   $("#btn-omdb-refresh").addEventListener("click", async () => {
     await window.api.omdbRefresh();
-    await loadOmdb();
+    await loadOmdb({ resetPage: true });
+  });
+  $("#btn-omdb-prev")?.addEventListener("click", () => {
+    if (omdbPage <= 0) return;
+    omdbPage -= 1;
+    loadOmdb();
+  });
+  $("#btn-omdb-next")?.addEventListener("click", () => {
+    const pages = Math.max(1, Math.ceil(omdbTotal / OMDB_PAGE_SIZE) || 1);
+    if (omdbPage >= pages - 1) return;
+    omdbPage += 1;
+    loadOmdb();
   });
   $("#btn-import-model").addEventListener("click", async () => {
     try {
@@ -847,9 +1255,9 @@ function wireUi() {
   });
   $("#omdb-query").addEventListener("input", () => {
     clearTimeout(omdbTimer);
-    omdbTimer = setTimeout(loadOmdb, 280);
+    omdbTimer = setTimeout(() => loadOmdb({ resetPage: true }), 280);
   });
-  $("#omdb-scale").addEventListener("change", loadOmdb);
+  $("#omdb-scale").addEventListener("change", () => loadOmdb({ resetPage: true }));
 
   wireCompareInteractions();
 
@@ -883,11 +1291,12 @@ async function boot() {
   const settings = await window.api.getSettings();
   state.mode = settings.mode || "factor";
   state.factor = settings.factor || 4;
-  state.longest = settings.longest || 2048;
+  state.longest = clampLongest(settings.longest || 2048);
   state.format = settings.lastFormat || "png";
   state.tile = settings.tile || 256;
   $("#format-select").value = state.format;
   $("#tile-select").value = String(state.tile);
+  if ($("#longest-custom")) $("#longest-custom").value = String(state.longest);
   syncModeUi();
   syncChipUi();
 
@@ -897,8 +1306,32 @@ async function boot() {
     $("#model-select").value = settings.lastModel;
   }
 
-  const py = await window.api.pythonStatus();
-  appendLog(`python · ${py.python}`);
+  window.api.onRuntimeProgress((payload) => {
+    if (!payload) return;
+    updateRuntimeLive(payload);
+    if (typeof payload.percent === "number") {
+      setProgress(payload.percent, payload.message || payload.stage || "installing…");
+      setRuntimeProgress(payload.percent, payload.message || payload.stage || "installing…");
+    } else if (payload.diskBytes != null && payload.expectedBytes) {
+      const pct = Math.min(95, Math.round((payload.diskBytes / payload.expectedBytes) * 100));
+      setProgress(pct, payload.message || "installing…");
+      setRuntimeProgress(pct, payload.message || "installing…");
+    } else if (payload.message) {
+      setProgress(undefined, payload.message);
+      setRuntimeProgress(undefined, payload.message);
+    }
+  });
+  window.api.onRuntimeLog((line) => appendLog(line));
+
+  const py = await refreshRuntimeUi();
+  if (!py.ready) {
+    switchTab("setup");
+    appendLog("AI runtime setup required — other tabs are locked until this finishes.");
+  }
+  appendLog(`python · ${py.python}${py.ready ? "" : " · NOT READY"}`);
+  if (py.source) appendLog(`runtime source · ${py.source}`);
+  appendLog(`layout · ${py.layout || "installed"} · userData · ${py.userData}`);
+  if (py.portableDir) appendLog(`portable dir · ${py.portableDir}`);
   appendLog(`models · ${py.modelsDir}`);
   if (!state.models.length) {
     appendLog("place .pth / .safetensors in models/ or download from openmodeldb");

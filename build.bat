@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo === OpenModelDB Upscaler build ===
-echo Output: named installer + portable EXEs in dist\
+echo Thin Setup + Portable (AI runtime downloads on first use)
 echo.
 
 where node >nul 2>&1
@@ -28,10 +28,17 @@ if not exist "node_modules\electron-builder\" (
   )
 )
 
+echo Preparing NSIS bitmaps...
+call node scripts\make-nsis-bitmaps.js
+if errorlevel 1 (
+  echo ERROR: NSIS bitmap generation failed.
+  exit /b 1
+)
+
 echo Cleaning dist\...
 if exist "dist\" rmdir /s /q "dist"
 
-echo Building Windows installer + portable...
+echo Building Windows Setup + Portable...
 set CSC_IDENTITY_AUTO_DISCOVERY=false
 call npx electron-builder --win nsis portable --publish never
 if errorlevel 1 (
@@ -55,11 +62,11 @@ for %%F in ("dist\*-Setup.exe") do set "FOUND_SETUP=1"
 for %%F in ("dist\*-Portable.exe") do set "FOUND_PORTABLE=1"
 
 if not defined FOUND_SETUP (
-  echo ERROR: setup installer EXE was not produced.
+  echo ERROR: Setup EXE was not produced.
   exit /b 1
 )
 if not defined FOUND_PORTABLE (
-  echo ERROR: portable EXE was not produced.
+  echo ERROR: Portable EXE was not produced.
   exit /b 1
 )
 
@@ -67,5 +74,6 @@ echo.
 echo Done. Shipping files only:
 dir /b "dist\*.exe"
 echo.
+echo First launch: use Install AI runtime (downloads torch into AppData).
 echo Folder: "%cd%\dist"
 exit /b 0

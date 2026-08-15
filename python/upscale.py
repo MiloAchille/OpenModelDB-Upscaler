@@ -50,10 +50,22 @@ def load_rgba(path: Path) -> tuple[Image.Image, Image.Image | None]:
     return img.convert("RGB"), None
 
 
-def image_to_tensor(img: Image.Image, device: torch.device) -> torch.Tensor:
+def image_to_tensor(img: Image.Image, device: torch.device, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     arr = np.asarray(img).astype(np.float32) / 255.0
     tensor = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    return tensor.to(device)
+    return tensor.to(device=device, dtype=dtype)
+
+
+def model_dtype(model: ImageModelDescriptor) -> torch.dtype:
+    """Match input tensors to the loaded weights (fp16 on CUDA half models)."""
+    try:
+        return next(model.model.parameters()).dtype
+    except Exception:
+        pass
+    try:
+        return next(model.parameters()).dtype  # type: ignore[attr-defined]
+    except Exception:
+        return torch.float32
 
 
 def tensor_to_image(tensor: torch.Tensor) -> Image.Image:
@@ -69,11 +81,12 @@ def upscale_tiled(
     overlap: int = 16,
 ) -> Image.Image:
     device = model.device
-    scale = int(model.scale)
+    dtype = model_dtype(model)
+    scale = max(1, int(model.scale))
     w, h = img.size
     if max(w, h) <= tile:
         with torch.inference_mode():
-            out = model(image_to_tensor(img, device))
+            out = model(image_to_tensor(img, device, dtype=dtype))
         return tensor_to_image(out)
 
     step = max(1, tile - overlap)
@@ -100,7 +113,7 @@ def upscale_tiled(
                 x0c = max(0, x1 - tile)
                 y0c = max(0, y1 - tile)
                 tile_img = img.crop((x0c, y0c, x1, y1))
-                out = model(image_to_tensor(tile_img, device))
+                out = model(image_to_tensor(tile_img, device, dtype=dtype))
                 out_img = tensor_to_image(out)
                 ox0, oy0 = x0c * scale, y0c * scale
                 ox1, oy1 = x1 * scale, y1 * scale
@@ -142,17 +155,27 @@ def reach_target(
     current = rgb
     model_scale = max(1, int(model.scale))
     tw, th = target
-    # Repeated native upscales until both dims meet or exceed target, then downscale.
-    guard = 0
+
+    # Always run the model at least once — 1x PBR / restoration models change content
+    # without changing resolution, so a same-size target must still infer.
+    progress(8, f"pass 1 ({model_scale}x)")
+    current = upscale_tiled(model, current, tile=tile)
+
+    guard = 1
     while (current.width < tw or current.height < th) and guard < 8:
+        if model_scale <= 1:
+            # Native 1x models cannot grow resolution; finish with a resize below.
+            log(
+                f"Model scale is 1x — cannot reach {tw}x{th} by further passes; "
+                f"resizing from {current.width}x{current.height}"
+            )
+            break
         progress(8 + guard * 10, f"pass {guard + 1} ({model_scale}x)")
         current = upscale_tiled(model, current, tile=tile)
         guard += 1
-        if guard >= 8:
-            break
-        # Stop early if a further pass would massively overshoot and we already exceed.
         if current.width >= tw and current.height >= th:
             break
+
     progress(92, "resizing to target")
     return resize_exact(current, target)
 
@@ -270,9 +293,9 @@ def main() -> int:
     device = resolve_device(args.device)
     if device.type == "cuda":
         gpu_name = torch.cuda.get_device_name(0)
-        log(f"Device: CUDA GPU — {gpu_name}")
+        log(f"Device: CUDA GPU - {gpu_name}")
     else:
-        log("Device: CPU — no CUDA GPU detected (slower, still works)")
+        log("Device: CPU - no CUDA GPU detected (slower, still works)")
     descriptor = ModelLoader().load_from_file(str(model_path))
     if not isinstance(descriptor, ImageModelDescriptor):
         raise SystemExit("Loaded model is not an image model")
@@ -280,8 +303,12 @@ def main() -> int:
     if device.type == "cuda":
         try:
             model = model.half()
+            log("Model precision: float16 (CUDA)")
         except Exception:
-            pass
+            log("Model precision: float32")
+    else:
+        log("Model precision: float32")
+    log(f"Model native scale: {int(model.scale)}x")
 
     progress(5, "upscaling")
     out_rgb = reach_target(model, rgb, target, tile=max(64, args.tile))

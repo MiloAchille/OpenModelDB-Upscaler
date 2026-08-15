@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld("api", {
   upscale: (opts) => ipcRenderer.invoke("upscale", opts),
   cancelUpscale: () => ipcRenderer.invoke("cancel-upscale"),
   pythonStatus: () => ipcRenderer.invoke("python-status"),
+  diagnoseRuntime: () => ipcRenderer.invoke("diagnose-runtime"),
+  installRuntime: () => ipcRenderer.invoke("install-runtime"),
+  cancelRuntimeInstall: () => ipcRenderer.invoke("cancel-runtime-install"),
+  pickPythonEnv: () => ipcRenderer.invoke("pick-python-env"),
+  clearCustomPython: () => ipcRenderer.invoke("clear-custom-python"),
+  setInstallTarget: (target) => ipcRenderer.invoke("set-install-target", target),
+  openRuntimeFolder: () => ipcRenderer.invoke("open-runtime-folder"),
+  openDownloadCache: () => ipcRenderer.invoke("open-download-cache"),
   onUpscaleProgress: (cb) => {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on("upscale-progress", listener);
@@ -40,5 +48,15 @@ contextBridge.exposeInMainWorld("api", {
     const listener = (_e, data) => cb(data);
     ipcRenderer.on("download-progress", listener);
     return () => ipcRenderer.removeListener("download-progress", listener);
+  },
+  onRuntimeProgress: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on("runtime-progress", listener);
+    return () => ipcRenderer.removeListener("runtime-progress", listener);
+  },
+  onRuntimeLog: (cb) => {
+    const listener = (_e, data) => cb(data);
+    ipcRenderer.on("runtime-log", listener);
+    return () => ipcRenderer.removeListener("runtime-log", listener);
   },
 });

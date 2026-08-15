@@ -19,6 +19,7 @@
     "appId": "com.openmodeldb.upscaler",
     "productName": "OpenModelDB Upscaler",
     "executableName": "OpenModelDB-Upscaler",
+    "beforePack": "./scripts/nsis-before-pack.js",
     "directories": {
       "output": "dist",
       "buildResources": "assets"
@@ -76,8 +77,12 @@
       "createStartMenuShortcut": true,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
+      "installerSidebar": "assets/installerSidebar.bmp",
+      "uninstallerSidebar": "assets/uninstallerSidebar.bmp",
+      "installerHeader": "assets/installerHeader.bmp",
       "artifactName": "${productName}-${version}-Setup.${ext}",
-      "differentialPackage": false
+      "differentialPackage": false,
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "${productName}-${version}-Portable.${ext}"

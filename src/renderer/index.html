@@ -27,6 +27,7 @@
           <button class="tab active" data-tab="work" type="button">Upscale</button>
           <button class="tab" data-tab="library" type="button">Models</button>
           <button class="tab" data-tab="models" type="button">OpenModelDB</button>
+          <button class="tab" data-tab="setup" type="button">Setup</button>
         </nav>
       </header>
 
@@ -81,6 +82,7 @@
           <div id="factor-row" class="field">
             <span>Upscale factor</span>
             <div class="chips" id="factor-chips">
+              <button type="button" class="chip" data-factor="1">×1</button>
               <button type="button" class="chip" data-factor="2">×2</button>
               <button type="button" class="chip" data-factor="3">×3</button>
               <button type="button" class="chip active" data-factor="4">×4</button>
@@ -102,6 +104,18 @@
               <button type="button" class="chip" data-longest="12288">12288</button>
               <button type="button" class="chip" data-longest="16384">16384</button>
             </div>
+            <label class="longest-custom">
+              <span>Custom</span>
+              <input
+                id="longest-custom"
+                type="number"
+                min="64"
+                max="16384"
+                step="1"
+                value="2048"
+                placeholder="e.g. 1536"
+              />
+            </label>
           </div>
 
           <label class="field">
@@ -125,6 +139,7 @@
               <option value="256" selected>256</option>
               <option value="384">384</option>
               <option value="512">512</option>
+              <option value="1024">1024</option>
             </select>
           </label>
 
@@ -187,8 +202,91 @@
             <button type="button" class="btn secondary" id="btn-omdb-refresh">Refresh</button>
             <a class="link" id="omdb-site" href="#">openmodeldb.info</a>
           </div>
-          <p class="omdb-status" id="omdb-status">Load the catalog to browse 600+ upscalers.</p>
+          <div class="omdb-status-row">
+            <p class="omdb-status" id="omdb-status">Load the catalog to browse 600+ upscalers.</p>
+            <div class="omdb-pager" id="omdb-pager" hidden>
+              <button type="button" class="btn secondary" id="btn-omdb-prev" aria-label="Previous page">←</button>
+              <span class="omdb-page-label" id="omdb-page-label">Page 1</span>
+              <button type="button" class="btn secondary" id="btn-omdb-next" aria-label="Next page">→</button>
+            </div>
+          </div>
           <div class="omdb-grid" id="omdb-grid"></div>
+        </section>
+      </main>
+
+      <main id="panel-setup" class="panel">
+        <section class="runtime-page">
+          <header class="runtime-page-head">
+            <div>
+              <h2>Setup</h2>
+              <p class="runtime-page-sub">
+                AI environment for Spandrel / PyTorch. Wheels download to
+                <code>Downloads\OpenModelDB-Upscaler-Cache</code> · final env ≈ 4.5 GB (CUDA)
+              </p>
+            </div>
+            <span class="runtime-badge" id="runtime-badge">Checking…</span>
+          </header>
+
+          <div class="runtime-gate" id="runtime-gate" hidden>
+            Other tabs stay locked until this setup is ready.
+          </div>
+
+          <div class="runtime-info-grid" id="runtime-info-grid"></div>
+
+          <ul class="runtime-steps" id="runtime-steps"></ul>
+
+          <div class="runtime-active" id="runtime-active" hidden>
+            <div class="runtime-active-label">Active interpreter</div>
+            <code class="runtime-active-path" id="runtime-active-path"></code>
+            <div class="runtime-active-meta" id="runtime-active-meta"></div>
+          </div>
+
+          <section class="runtime-existing">
+            <div class="runtime-existing-head">
+              <h3>Existing environment</h3>
+              <p>
+                Point at a ComfyUI / Stability Matrix venv (or any Python with torch). Missing packages can be
+                installed into AppData (isolated, default) or into that env.
+              </p>
+            </div>
+            <div class="runtime-existing-path-row">
+              <code class="runtime-existing-path" id="runtime-custom-path">None selected</code>
+              <button type="button" class="btn secondary" id="btn-pick-python-env">Browse venv…</button>
+              <button type="button" class="btn secondary" id="btn-clear-python-env">Clear</button>
+            </div>
+            <p class="runtime-existing-status" id="runtime-custom-status"></p>
+            <label class="field runtime-target-field">
+              <span>Install missing packages into</span>
+              <select id="runtime-install-target">
+                <option value="appdata">AppData (isolated app venv) — default</option>
+                <option value="selected">Selected environment (modifies that venv)</option>
+              </select>
+            </label>
+          </section>
+
+          <div class="runtime-actions">
+            <button type="button" class="btn primary" id="btn-install-runtime">Set up runtime</button>
+            <button type="button" class="btn danger" id="btn-cancel-runtime" hidden>Cancel install</button>
+            <button type="button" class="btn secondary" id="btn-rescan-runtime">Rescan</button>
+            <button type="button" class="btn secondary" id="btn-open-runtime-folder">Open data folder</button>
+            <button type="button" class="btn secondary" id="btn-open-cache-folder">Open cache</button>
+          </div>
+
+          <div class="runtime-live" id="runtime-live" hidden>
+            <div class="runtime-live-stage" id="runtime-live-stage">Idle</div>
+            <div class="runtime-live-stats" id="runtime-live-stats"></div>
+            <div class="progress-block runtime-progress">
+              <div class="progress-track"><div class="progress-fill" id="runtime-progress-fill"></div></div>
+            </div>
+          </div>
+
+          <div class="console runtime-console" id="runtime-console">
+            <div class="console-head">
+              <span>Console</span>
+              <button type="button" class="btn tiny secondary" id="btn-clear-runtime-log">Clear</button>
+            </div>
+            <pre class="log" id="runtime-log"></pre>
+          </div>
         </section>
       </main>
     </div>
