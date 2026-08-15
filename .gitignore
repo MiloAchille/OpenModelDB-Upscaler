@@ -21,3 +21,4 @@ models/*.safetensors
 .vscode/
 .idea/
 *.code-workspace
+set-version.bat

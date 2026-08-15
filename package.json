@@ -1,6 +1,6 @@
 {
   "name": "openmodeldb-upscaler",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Local AI texture upscaler with OpenModelDB integration",
   "main": "src/main.js",
   "author": "OpenModelDB Upscaler",
@@ -73,8 +73,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
+      "allowElevation": true,
+      "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerSidebar": "assets/installerSidebar.bmp",

@@ -1,8 +1,14 @@
 # OpenModelDB Upscaler
 
+> Vibecoded.
+
 Desktop app for **local AI texture upscaling** on **NVIDIA GPUs**, with browsing and download from [OpenModelDB](https://openmodeldb.info/).
 
 Built with Electron + a Python [Spandrel](https://github.com/chaiNNer-org/spandrel) / PyTorch worker (**CUDA**).
+
+![OpenModelDB Upscaler — before/after compare, factor mode, and export controls](assets/screenshot.png)
+
+![OpenModelDB Upscaler — browse, preview, and download models from OpenModelDB](assets/screenshot-openmodeldb.png)
 
 > **NVIDIA GPU required.** This app targets CUDA on an NVIDIA graphics card. AMD / Intel GPUs are not supported. Without a working NVIDIA driver + CUDA-capable GPU, upscaling is not the intended use case.
 
@@ -50,6 +56,17 @@ From [Releases](https://github.com/MiloAchille/OpenModelDB-Upscaler/releases):
 | `OpenModelDB Upscaler-*-Portable.exe` | No installer — run from a folder (USB / tools drive) |
 
 Both builds are **thin**: they do **not** ship the multi‑GB PyTorch stack inside the EXE.
+
+### Upgrading (Setup.exe)
+
+Run a newer `*-Setup.exe` over an existing install — **no manual uninstall**.
+
+- Same `appId` → Windows finds the previous install and **overwrites program files** in that folder (no second copy).
+- **AppData** (AI runtime, settings, imported models) is **kept**.
+- Shortcuts are refreshed. Close the app before upgrading if it’s running.
+- Do **not** change `appId` in future builds or upgrades break.
+
+Portable: replace the old `*-Portable.exe` (and keep `OpenModelDB-Upscaler-Data\` next to it).
 
 ### 2. Finish **Setup** (required once)
 
