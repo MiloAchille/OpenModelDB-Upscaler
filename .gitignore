@@ -1,0 +1,23 @@
+node_modules/
+dist/
+python/.venv/
+python/__pycache__/
+*.pyc
+*.partial
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+
+# Model weights are too large for GitHub (>100MB). Keep them locally / attach to Releases.
+models/*.pth
+models/*.pt
+models/*.ckpt
+models/*.safetensors
+!models/.gitkeep
+!models/README.md
+
+# Local scratch / editor
+.vscode/
+.idea/
+*.code-workspace

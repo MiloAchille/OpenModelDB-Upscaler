@@ -1,0 +1,97 @@
+{
+  "name": "openmodeldb-upscaler",
+  "version": "1.0.0",
+  "description": "Local AI texture upscaler with OpenModelDB integration",
+  "main": "src/main.js",
+  "author": "OpenModelDB Upscaler",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "setup": "node scripts/setup-python.mjs",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win nsis portable",
+    "dist:portable": "electron-builder --win portable",
+    "dist:nsis": "electron-builder --win nsis",
+    "dist:full-portable": "node scripts/make-portable.mjs"
+  },
+  "build": {
+    "appId": "com.openmodeldb.upscaler",
+    "productName": "OpenModelDB Upscaler",
+    "executableName": "OpenModelDB-Upscaler",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "src/**/*",
+      "python/**/*",
+      "assets/fonts/**/*",
+      "package.json",
+      "!python/.venv/**",
+      "!python/__pycache__/**"
+    ],
+    "extraResources": [
+      {
+        "from": "models",
+        "to": "models",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "python",
+        "to": "python",
+        "filter": [
+          "**/*",
+          "!.venv/**",
+          "!__pycache__/**"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "python/**/*"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-Setup.${ext}",
+      "differentialPackage": false
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
+    }
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "megajs": "^1.3.10"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
+  }
+}

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: https: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenModelDB Upscaler</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top">
+        <div class="brand">
+          <img class="brand-logo" src="logo.png" alt="OpenModelDB Upscaler" />
+          <p class="tagline">OpenModelDB Upscaler · local Spandrel · game-ready exports</p>
+        </div>
+        <nav class="tabs" role="tablist">
+          <button class="tab active" data-tab="work" type="button">Upscale</button>
+          <button class="tab" data-tab="library" type="button">Models</button>
+          <button class="tab" data-tab="models" type="button">OpenModelDB</button>
+        </nav>
+      </header>
+
+      <main id="panel-work" class="panel active">
+        <section class="viewer" id="viewer" tabindex="0">
+          <div class="compare-shell" id="compare-shell">
+            <div class="compare-viewport" id="compare-viewport">
+              <div class="viewer-empty" id="viewer-empty">
+                <strong>Drop · paste · load</strong>
+                <span>PNG · TGA · TIFF · JPG · WEBP · BMP</span>
+                <button type="button" class="btn secondary" id="btn-browse">Load texture</button>
+              </div>
+
+              <div class="compare-world" id="compare-world" hidden>
+                <img id="img-after" class="layer after" alt="" draggable="false" hidden />
+                <div class="before-clip" id="before-clip">
+                  <img id="img-before" class="layer before" alt="" draggable="false" hidden />
+                </div>
+                <div class="slider" id="slider" hidden>
+                  <div class="slider-line"></div>
+                  <div class="slider-handle" aria-hidden="true"></div>
+                </div>
+              </div>
+            </div>
+            <div class="compare-chrome" id="compare-chrome" hidden>
+              <span class="pill" id="pill-before">Source</span>
+              <span class="pill muted" id="zoom-label">100%</span>
+              <div class="chrome-actions">
+                <button type="button" class="btn tiny secondary" id="btn-change-image">Load another</button>
+                <span class="pill" id="pill-after" hidden>After</span>
+              </div>
+            </div>
+          </div>
+
+          <p class="meta" id="image-meta">No image loaded · drop / paste / load a texture</p>
+        </section>
+
+        <aside class="controls">
+          <label class="field">
+            <span>Model</span>
+            <select id="model-select"></select>
+          </label>
+
+          <div class="field">
+            <span>Size mode</span>
+            <div class="segmented" role="group">
+              <button type="button" class="seg active" data-mode="factor">Factor</button>
+              <button type="button" class="seg" data-mode="longest">Longest side</button>
+            </div>
+          </div>
+
+          <div id="factor-row" class="field">
+            <span>Upscale factor</span>
+            <div class="chips" id="factor-chips">
+              <button type="button" class="chip" data-factor="2">×2</button>
+              <button type="button" class="chip" data-factor="3">×3</button>
+              <button type="button" class="chip active" data-factor="4">×4</button>
+              <button type="button" class="chip" data-factor="6">×6</button>
+              <button type="button" class="chip" data-factor="8">×8</button>
+              <button type="button" class="chip" data-factor="16">×16</button>
+            </div>
+          </div>
+
+          <div id="longest-row" class="field hidden">
+            <span>Longest side (px)</span>
+            <div class="chips" id="longest-chips">
+              <button type="button" class="chip" data-longest="512">512</button>
+              <button type="button" class="chip" data-longest="1024">1024</button>
+              <button type="button" class="chip active" data-longest="2048">2048</button>
+              <button type="button" class="chip" data-longest="3072">3072</button>
+              <button type="button" class="chip" data-longest="4096">4096</button>
+              <button type="button" class="chip" data-longest="8192">8192</button>
+              <button type="button" class="chip" data-longest="12288">12288</button>
+              <button type="button" class="chip" data-longest="16384">16384</button>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>Export format</span>
+            <select id="format-select">
+              <option value="png" selected>PNG</option>
+              <option value="tga">TGA</option>
+              <option value="tiff">TIFF</option>
+              <option value="dds">DDS (uncompressed ARGB)</option>
+              <option value="exr">EXR</option>
+              <option value="webp">WebP</option>
+              <option value="jpg">JPEG</option>
+              <option value="bmp">BMP</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Tile size</span>
+            <select id="tile-select">
+              <option value="128">128</option>
+              <option value="256" selected>256</option>
+              <option value="384">384</option>
+              <option value="512">512</option>
+            </select>
+          </label>
+
+          <div class="actions">
+            <button type="button" class="btn primary" id="btn-upscale" disabled>Upscale</button>
+            <button type="button" class="btn secondary" id="btn-cancel" disabled>Cancel</button>
+            <button type="button" class="btn secondary" id="btn-open-out" disabled>Show file</button>
+          </div>
+
+          <div class="progress-block">
+            <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+            <p class="progress-label" id="progress-label">Idle</p>
+          </div>
+
+          <div class="console-toggle-row">
+            <button type="button" class="btn secondary" id="btn-toggle-console">Show console</button>
+          </div>
+
+          <div class="console collapsed" id="console">
+            <div class="console-head">
+              <span>Console</span>
+              <button type="button" class="btn tiny secondary" id="btn-clear-log">Clear</button>
+            </div>
+            <pre class="log" id="log"></pre>
+          </div>
+        </aside>
+      </main>
+
+      <main id="panel-library" class="panel">
+        <section class="library">
+          <div class="library-bar">
+            <div>
+              <h2>Installed models</h2>
+              <p class="library-status" id="library-status">Manage local weights used for upscaling</p>
+            </div>
+            <div class="library-actions">
+              <button type="button" class="btn primary" id="btn-import-model">Import model</button>
+              <button type="button" class="btn secondary" id="btn-open-models-folder">Open folder</button>
+              <button type="button" class="btn secondary" id="btn-refresh-library">Refresh</button>
+            </div>
+          </div>
+          <div class="library-list" id="library-list"></div>
+        </section>
+      </main>
+
+      <main id="panel-models" class="panel">
+        <section class="omdb">
+          <div class="omdb-bar">
+            <div class="search-wrap">
+              <input id="omdb-query" type="search" placeholder="Search models by name, author, or purpose" />
+            </div>
+            <select id="omdb-scale">
+              <option value="">Any scale</option>
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+            <button type="button" class="btn secondary" id="btn-omdb-refresh">Refresh</button>
+            <a class="link" id="omdb-site" href="#">openmodeldb.info</a>
+          </div>
+          <p class="omdb-status" id="omdb-status">Load the catalog to browse 600+ upscalers.</p>
+          <div class="omdb-grid" id="omdb-grid"></div>
+        </section>
+      </main>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>
