@@ -6,9 +6,9 @@ Desktop app for **local AI texture upscaling** on **NVIDIA GPUs**, with browsing
 
 Built with Electron + a Python [Spandrel](https://github.com/chaiNNer-org/spandrel) / PyTorch worker (**CUDA**).
 
-![OpenModelDB Upscaler — before/after compare, factor mode, and export controls](assets/screenshot.png)
+![OpenModelDB Upscaler — before/after compare, factor mode, and export controls](assets/app_mainview.png)
 
-![OpenModelDB Upscaler — browse, preview, and download models from OpenModelDB](assets/screenshot-openmodeldb.png)
+![OpenModelDB Upscaler — browse, preview, and download models from OpenModelDB](assets/app_opendbview.png)
 
 > **NVIDIA GPU required.** This app targets CUDA on an NVIDIA graphics card. AMD / Intel GPUs are not supported. Without a working NVIDIA driver + CUDA-capable GPU, upscaling is not the intended use case.
 
