@@ -1,5 +1,7 @@
 # OpenModelDB Upscaler
 
+> Vibecoded.
+
 Desktop app for local AI texture upscaling, with browsing/download from [OpenModelDB](https://openmodeldb.info/).
 
 Built with Electron + a Python Spandrel/PyTorch worker (CUDA when available).
